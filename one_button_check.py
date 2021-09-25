@@ -1,76 +1,104 @@
-# GPIOを制御するライブラリ
-import wiringpi
-# タイマーのライブラリ
 import time
 import datetime
+import threading
 
-file_name = "/home/pi/one_button/one_button_log.txt"
+import wiringpi
 
-def tail(f, window=1):
-    """
-    Returns the last `window` lines of file `f` as a list of bytes.
-    """
-    if window == 0:
-        return b''
-    BUFSIZE = 1024
-    f.seek(0, 2)
-    end = f.tell()
-    nlines = window + 1
-    data = []
-    while nlines > 0 and end > 0:
-        i = max(0, end - BUFSIZE)
-        nread = min(end, BUFSIZE)
+import one_button_common
 
-        f.seek(i)
-        chunk = f.read(nread)
-        data.append(chunk)
-        nlines -= chunk.count(b'\n')
-        end -= nread
-    return b'\n'.join(b''.join(reversed(data)).splitlines()[-window:])
+led_state = "done"
 
-def is_forget():
-    last_log_str = ""
-    with open(file_name, 'rb') as f:
-        last_log_str = tail(f, 1).decode('utf-8')
-        print("last_log_str: {}".format(last_log_str) )
-    last_log = datetime.datetime.strptime(last_log_str,'%Y-%m-%d %H:%M:%S')
-    diff = datetime.datetime.now() - last_log
-    print("diff: {}".format(diff))
-    if diff > datetime.timedelta(hours=13):
-        print("TRUE")
-        return True
+
+def calc_state(now_datetime, last_log_datetime):
+    # AM
+    margin = datetime.timedelta(hours=4)
+    if 18 > now_datetime.hour >= 6:
+        fast = datetime.datetime(now_datetime.year,
+                                 now_datetime.month,
+                                 now_datetime.day,
+                                 6, 0, 0, 0,)
+    # PM
+    elif now_datetime.hour >= 18:
+        fast = datetime.datetime(now_datetime.year,
+                                 now_datetime.month,
+                                 now_datetime.day,
+                                 18, 0, 0, 0,)
     else:
-        print("FALSE")
-        return False
+        fast = datetime.datetime(now_datetime.year,
+                                 now_datetime.month,
+                                 now_datetime.day - 1,
+                                 18, 0, 0, 0,)
 
-def main():
-    led_red_pin = 27 # 13番端子
+    late = fast + margin
+    if last_log_datetime > fast:
+        return "done"
+    if now_datetime > late:
+        return "forget"
+    else:
+        return "yet"
 
+
+def get_last_log_datetime():
+    last_log_str = ""
+    with open(one_button_common.log_file_name, 'rb') as f:
+        last_log_str = one_button_common.tail(f, 1).decode('utf-8')
+        print("last_log_str: {}".format(last_log_str))
+
+    try:
+        last_log = datetime.datetime.strptime(last_log_str, '%Y-%m-%d %H:%M:%S')
+    except:
+        return -1
+    return last_log
+
+
+def led_control_thread():
+    global led_state
+    led_state = "done"
+    flip = 0
+    while True:
+        if led_state == "done":
+            wiringpi.digitalWrite(one_button_common.led_red_pin, 0)
+        elif led_state == "forget":
+            wiringpi.digitalWrite(one_button_common.led_red_pin, flip)
+            flip = (flip + 1) % 2
+        elif led_state == "yet":
+            wiringpi.digitalWrite(one_button_common.led_red_pin, 1)
+        time.sleep(1)
+
+
+def gpio_init():
     # GPIO初期化
     wiringpi.wiringPiSetupGpio()
     # GPIOを出力モード（1）に設定
-    wiringpi.pinMode( led_red_pin, 1 )
+    wiringpi.pinMode(one_button_common.led_red_pin, 1)
     # 端子に何も接続されていない場合の状態を設定
     # 3.3Vの場合には「2」（プルアップ）
     # 0Vの場合は「1」と設定する（プルダウン）
-    wiringpi.pullUpDnControl( led_red_pin, 1 )
+    wiringpi.pullUpDnControl(one_button_common.led_red_pin, 1)
+
+
+def main():
+    global led_state
+    gpio_init()
+
+    th1 = threading.Thread(target=led_control_thread)
+    th1.start()
 
     while True:
-        
         # check button log
-        if is_forget():
-            wiringpi.digitalWrite(led_red_pin, 1)
+        state = calc_state(datetime.datetime.now(), get_last_log_datetime())
+        print(state)
+        if state == "done":
+            led_state = "done"
+            sleep_time = 5 
+        elif state == "forget":
+            led_state = "forget"
             sleep_time = 5
-        else:
-            wiringpi.digitalWrite(led_red_pin, 0)
-            sleep_time = 600
+        elif state == "yet":
+            led_state = "yet"
+            sleep_time = 5
         time.sleep(sleep_time)
-    
+
+
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
