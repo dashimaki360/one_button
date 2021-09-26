@@ -90,7 +90,7 @@ def main():
         print(state)
         if state == "done":
             led_state = "done"
-            sleep_time = 5 
+            sleep_time = 5
         elif state == "forget":
             led_state = "forget"
             sleep_time = 5
